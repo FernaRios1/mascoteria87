@@ -1,64 +1,36 @@
-import { createContext, useContext, useEffect, useState } from "react"
-import { api } from "../services/api"
-import { useAuth } from "./AuthContext"
+import { createContext, useContext, useEffect, useState } from "react";
+import { api } from "../services/api";
 
-const FavCtx = createContext()
-export const useFavorites = () => useContext(FavCtx)
+const Ctx = createContext();
 
 export function FavoritesProvider({ children }) {
-  const { user } = useAuth()
-  const [favorites, setFavorites] = useState([]) // array de publicaciones
+  const [favorites, setFavorites] = useState([]);
 
-  // 🔹 Cargar favoritos (según si hay user o no)
+  // Carga inicial
   useEffect(() => {
-    async function load() {
-      if (user) {
-        try {
-          const { data } = await api.get("/favoritos")
-          setFavorites(data) // backend devuelve lista de publicaciones
-        } catch (err) {
-          console.error("Error cargando favoritos", err)
-        }
-      } else {
-        // fallback localStorage
-        const saved = localStorage.getItem("favorites")
-        setFavorites(saved ? JSON.parse(saved) : [])
-      }
-    }
-    load()
-  }, [user])
+    api.get("/favoritos")
+      .then(r => setFavorites(r.data || []))
+      .catch(() => setFavorites([]));
+  }, []);
 
-  // 🔹 Guardar en backend o localStorage
-  async function toggleFavorite(pubId) {
-    if (user) {
-      const exists = favorites.find((f) => f.id === pubId)
-      if (exists) {
-        try {
-          await api.delete(`/favoritos/${pubId}`)
-          setFavorites((prev) => prev.filter((f) => f.id !== pubId))
-        } catch (err) {
-          console.error("Error quitando favorito", err)
-        }
-      } else {
-        try {
-          const { data } = await api.post(`/favoritos/${pubId}`)
-          setFavorites((prev) => [...prev, data])
-        } catch (err) {
-          console.error("Error agregando favorito", err)
-        }
-      }
+  async function toggleFavorite(publicacionId) {
+    const isFav = favorites.some(f => (f.id ?? f.publicacion_id) === publicacionId);
+    if (isFav) {
+      await api.delete(`/favoritos/${publicacionId}`);
+      setFavorites(prev => prev.filter(f => (f.id ?? f.publicacion_id) !== publicacionId));
     } else {
-      // fallback en localStorage
-      setFavorites((prev) => {
-        const next = prev.includes(pubId)
-          ? prev.filter((id) => id !== pubId)
-          : [...prev, pubId]
-        localStorage.setItem("favorites", JSON.stringify(next))
-        return next
-      })
+      await api.post("/favoritos", { publicacion_id: publicacionId });
+      setFavorites(prev => [{ publicacion_id: publicacionId }, ...prev]); // quick add
+      // opcional: refrescar desde backend para traer título/imagen
+      // const { data } = await api.get("/favoritos"); setFavorites(data);
     }
   }
 
-  const value = { favorites, toggleFavorite }
-  return <FavCtx.Provider value={value}>{children}</FavCtx.Provider>
+  return (
+    <Ctx.Provider value={{ favorites, toggleFavorite }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
+
+export const useFavorites = () => useContext(Ctx);
