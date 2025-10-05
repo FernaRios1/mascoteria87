@@ -1,13 +1,3 @@
-
-const fs = require("fs");
-const path = require("path");
-
-// crea /api/uploads si no existe y sírvela como estático
-const uploadsPath = path.resolve(__dirname, "..", "uploads");
-fs.mkdirSync(uploadsPath, { recursive: true });
-app.use("/uploads", express.static(uploadsPath));
-
-
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
@@ -26,28 +16,23 @@ const favoritosRoutes = require("./routes/favoritos.routes");
 const app = express();
 
 // Middlewares base
-app.use(cors({ origin: true }));              // abre CORS (simple para demo)
+app.use(cors({ origin: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
-// ---- uploads: crear carpeta y servir estáticos ----
+// === uploads: crear carpeta y servir estáticos ===
 const uploadsPath = path.resolve(__dirname, "..", "uploads");
-try {
-  fs.mkdirSync(uploadsPath, { recursive: true }); // crea si no existe
-  app.use("/uploads", express.static(uploadsPath, { index: false }));
-  console.log("Uploads dir:", uploadsPath);
-} catch (e) {
-  console.error("No se pudo preparar /uploads:", e);
-}
-// ---------------------------------------------------
+fs.mkdirSync(uploadsPath, { recursive: true });
+app.use("/uploads", express.static(uploadsPath, { index: false }));
+// ================================================
 
 // Montar rutas
 app.use("/categorias", categoriasRoutes);
 app.use("/auth", authRoutes);
 app.use("/publicaciones", publicacionesRoutes);
 app.use("/usuarios", usuariosRoutes);
-app.use("/", misPublicacionesRoutes);   // GET /mis-publicaciones
+app.use("/", misPublicicionesRoutes); // GET /mis-publicaciones
 app.use("/favoritos", favoritosRoutes);
 
 // Healthcheck
@@ -59,10 +44,10 @@ app.use((req, res, next) => {
   res.status(404).json({ error: "Not found" });
 });
 
-// Manejador de errores
+// Manejador de errores (muestra el detalle mientras depuramos)
 app.use((err, _req, res, _next) => {
   console.error(err);
-  res.status(500).json({ error: "Error interno" });
+  res.status(500).json({ error: "Error interno", detalle: err.message });
 });
 
 module.exports = app;
