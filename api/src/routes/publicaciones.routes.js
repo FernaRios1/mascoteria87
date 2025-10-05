@@ -19,17 +19,33 @@ const storage = multer.diskStorage({
     cb(null, `${uuid()}${path.extname(file.originalname).toLowerCase()}`),
 });
 
-// (opcional) si quieres restringir a imágenes, descomenta el fileFilter
-// const fileFilter = (_req, file, cb) => {
-//   const ok = /image\/(png|jpe?g|gif|webp)/i.test(file.mimetype);
-//   cb(ok ? null : new Error("Formato de imagen no permitido"), ok);
-// };
-
 const upload = multer({
   storage,
-  // fileFilter,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
+
+// ---------- helpers ----------
+function pickCategoriaId(body) {
+  // Acepta: categoria_id, categorias (string/array), categorias[]
+  if (body.categoria_id !== undefined) {
+    const v = Array.isArray(body.categoria_id) ? body.categoria_id[0] : body.categoria_id;
+    return Number(v);
+  }
+  if (body.categorias !== undefined) {
+    const v = Array.isArray(body.categorias) ? body.categorias[0] : body.categorias;
+    return Number(v);
+  }
+  if (body["categorias[]"] !== undefined) {
+    const v = Array.isArray(body["categorias[]"]) ? body["categorias[]"][0] : body["categorias[]"];
+    return Number(v);
+  }
+  return undefined;
+}
+
+function toNumberOrNull(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
 
 // ================= LISTADO (con filtros/paginación) =================
 router.get("/", async (req, res, next) => {
@@ -110,14 +126,22 @@ const createSchema = Joi.object({
 
 router.post("/", auth, upload.single("imagen"), async (req, res, next) => {
   try {
+    // Normalizar body desde form-data
     const body = { ...req.body };
-    const { error } = createSchema.validate(body, { abortEarly: false });
-    if (error) return res.status(400).json({ error: "Validación", detalles: error.details });
+    const categoria_id = pickCategoriaId(body);
+    const precio = toNumberOrNull(body.precio);
+    const titulo = (body.titulo || "").toString().trim();
+    const descripcion = (body.descripcion || "").toString();
 
-    const categoria_id = Number(body.categoria_id);
-    const precio = Number(body.precio);
-    const titulo = body.titulo;
-    const descripcion = body.descripcion || "";
+    const validar = {
+      categoria_id,
+      titulo,
+      descripcion,
+      precio,
+      imagen_url: body.imagen_url ?? null,
+    };
+    const { error } = createSchema.validate(validar, { abortEarly: false });
+    if (error) return res.status(400).json({ error: "Validación", detalles: error.details });
 
     const imagenSubida = req.file ? `/uploads/${req.file.filename}` : null;
     const imagen = imagenSubida || body.imagen_url || null;
@@ -152,19 +176,27 @@ router.patch("/:id", auth, upload.single("imagen"), async (req, res, next) => {
     if (dueño.rows[0].usuario_id !== req.user.id) return res.status(403).json({ error: "No autorizado" });
 
     const body = { ...req.body };
-    const { error } = updateSchema.validate(body, { abortEarly: false });
-    if (error) return res.status(400).json({ error: "Validación", detalles: error.details });
+    const maybeCategoria = pickCategoriaId(body);
+    const maybePrecio = body.precio !== undefined ? toNumberOrNull(body.precio) : undefined;
 
     const imagenSubida = req.file ? `/uploads/${req.file.filename}` : undefined;
     const imagen = imagenSubida ?? body.imagen_url;
 
     const updates = {
-      categoria_id: body.categoria_id !== undefined ? Number(body.categoria_id) : undefined,
+      categoria_id: maybeCategoria,
       titulo: body.titulo,
       descripcion: body.descripcion,
-      precio: body.precio !== undefined ? Number(body.precio) : undefined,
+      precio: maybePrecio,
       imagen_url: imagen
     };
+
+    // Validar solo lo enviado
+    const validar = {};
+    for (const [k, v] of Object.entries(updates)) {
+      if (v !== undefined) validar[k] = v;
+    }
+    const { error } = updateSchema.validate(validar, { abortEarly: false });
+    if (error) return res.status(400).json({ error: "Validación", detalles: error.details });
 
     const fields = [];
     const vals = [];
