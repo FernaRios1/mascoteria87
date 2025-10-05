@@ -1,3 +1,13 @@
+
+const fs = require("fs");
+const path = require("path");
+
+// crea /api/uploads si no existe y sírvela como estático
+const uploadsPath = path.resolve(__dirname, "..", "uploads");
+fs.mkdirSync(uploadsPath, { recursive: true });
+app.use("/uploads", express.static(uploadsPath));
+
+
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
