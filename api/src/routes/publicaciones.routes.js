@@ -3,77 +3,85 @@ const Joi = require("joi");
 const { query } = require("../models/queries");
 const auth = require("../middlewares/auth");
 
-// Soporte de imágenes
+// 👇 Soporte de imágenes
 const multer = require("multer");
 const path = require("path");
+const fs = require("fs");
 const { v4: uuid } = require("uuid");
 
+// === Preparar carpeta uploads (Render arranca sin ella) ===
+const uploadsPath = path.resolve(__dirname, "..", "..", "uploads");
+fs.mkdirSync(uploadsPath, { recursive: true });
+
+// Multer con ruta absoluta y nombre seguro
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsPath),
+  filename: (_req, file, cb) =>
+    cb(null, `${uuid()}${path.extname(file.originalname).toLowerCase()}`),
+});
+
+// (opcional) limitar a imágenes
+const fileFilter = (_req, file, cb) => {
+  const ok = /image\/(png|jpe?g|gif|webp)/i.test(file.mimetype);
+  cb(ok ? null : new Error("Formato de imagen no permitido"), ok);
+};
+
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: path.join(__dirname, "..", "..", "uploads"),
-    filename: (_req, file, cb) =>
-      cb(null, `${uuid()}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage,
+  fileFilter,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
-// LISTADO con filtro opcional y/o paginación
+// ================= LISTADO (con filtros/paginación) =================
 router.get("/", async (req, res, next) => {
-    try {
-      const { categoria_id, page, limit } = req.query;
-  
-      // WHERE dinámico
-      const where = [];
-      const params = [];
-      if (categoria_id) {
-        params.push(Number(categoria_id));
-        where.push(`p.categoria_id = $${params.length}`);
-      }
-      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  
-      // ¿Hay paginación?
-      const pageNum = page ? Math.max(1, Number(page)) : null;
-      const limitNum = limit ? Math.max(1, Number(limit)) : null;
-  
-      if (pageNum && limitNum) {
-        // total
-        const { rows: countRows } = await query(
-          `SELECT COUNT(*)::int AS total FROM publicaciones p ${whereSql}`,
-          params
-        );
-        const total = countRows[0]?.total ?? 0;
-        const pages = Math.max(1, Math.ceil(total / limitNum));
-        const offset = (pageNum - 1) * limitNum;
-  
-        // items
-        const { rows: items } = await query(
-          `SELECT p.*, c.nombre AS categoria
-           FROM publicaciones p
-           LEFT JOIN categorias c ON c.id = p.categoria_id
-           ${whereSql}
-           ORDER BY p.creado_en DESC
-           LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-          [...params, limitNum, offset]
-        );
-  
-        return res.json({ items, total, page: pageNum, pages });
-      }
-  
-      // sin paginación → devolver array (compatibilidad)
-      const { rows } = await query(
+  try {
+    const { categoria_id, page, limit } = req.query;
+
+    const where = [];
+    const params = [];
+    if (categoria_id) {
+      params.push(Number(categoria_id));
+      where.push(`p.categoria_id = $${params.length}`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const pageNum = page ? Math.max(1, Number(page)) : null;
+    const limitNum = limit ? Math.max(1, Number(limit)) : null;
+
+    if (pageNum && limitNum) {
+      const { rows: countRows } = await query(
+        `SELECT COUNT(*)::int AS total FROM publicaciones p ${whereSql}`,
+        params
+      );
+      const total = countRows[0]?.total ?? 0;
+      const pages = Math.max(1, Math.ceil(total / limitNum));
+      const offset = (pageNum - 1) * limitNum;
+
+      const { rows: items } = await query(
         `SELECT p.*, c.nombre AS categoria
          FROM publicaciones p
          LEFT JOIN categorias c ON c.id = p.categoria_id
          ${whereSql}
-         ORDER BY p.creado_en DESC`,
-        params
+         ORDER BY p.creado_en DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limitNum, offset]
       );
-      res.json(rows);
-    } catch (e) { next(e); }
-  });
-  
+      return res.json({ items, total, page: pageNum, pages });
+    }
 
-// ========== DETALLE ==========
+    const { rows } = await query(
+      `SELECT p.*, c.nombre AS categoria
+       FROM publicaciones p
+       LEFT JOIN categorias c ON c.id = p.categoria_id
+       ${whereSql}
+       ORDER BY p.creado_en DESC`,
+      params
+    );
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+// ================= DETALLE =================
 router.get("/:id", async (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -92,7 +100,7 @@ router.get("/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ========== CREAR ==========
+// ================= CREAR =================
 const createSchema = Joi.object({
   categoria_id: Joi.number().integer().required(),
   titulo: Joi.string().min(3).required(),
@@ -126,7 +134,7 @@ router.post("/", auth, upload.single("imagen"), async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ========== EDITAR (PATCH) ==========
+// ================= EDITAR (PATCH) =================
 const updateSchema = Joi.object({
   categoria_id: Joi.number().integer(),
   titulo: Joi.string().min(3),
@@ -140,21 +148,17 @@ router.patch("/:id", auth, upload.single("imagen"), async (req, res, next) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: "ID inválido" });
 
-    // verificar dueño
     const dueño = await query("SELECT usuario_id FROM publicaciones WHERE id=$1", [id]);
     if (!dueño.rows[0]) return res.status(404).json({ error: "Publicación no encontrada" });
     if (dueño.rows[0].usuario_id !== req.user.id) return res.status(403).json({ error: "No autorizado" });
 
-    // validar body
     const body = { ...req.body };
     const { error } = updateSchema.validate(body, { abortEarly: false });
     if (error) return res.status(400).json({ error: "Validación", detalles: error.details });
 
-    // manejar imagen
     const imagenSubida = req.file ? `/uploads/${req.file.filename}` : undefined;
-    const imagen = imagenSubida ?? body.imagen_url; // undefined = no cambiar; null/URL = setear
+    const imagen = imagenSubida ?? body.imagen_url;
 
-    // Construir SET dinámico solo con campos enviados
     const updates = {
       categoria_id: body.categoria_id !== undefined ? Number(body.categoria_id) : undefined,
       titulo: body.titulo,
@@ -166,28 +170,21 @@ router.patch("/:id", auth, upload.single("imagen"), async (req, res, next) => {
     const fields = [];
     const vals = [];
     let i = 1;
-
     for (const [k, v] of Object.entries(updates)) {
-      if (v !== undefined) {
-        fields.push(`${k}=$${i++}`);
-        vals.push(v);
-      }
+      if (v !== undefined) { fields.push(`${k}=$${i++}`); vals.push(v); }
     }
-
     if (!fields.length) return res.status(400).json({ error: "Sin cambios" });
-
     vals.push(id);
 
     const { rows } = await query(
       `UPDATE publicaciones SET ${fields.join(", ")} WHERE id=$${i} RETURNING *`,
       vals
     );
-
     res.json(rows[0]);
   } catch (e) { next(e); }
 });
 
-// ========== ELIMINAR ==========
+// ================= ELIMINAR =================
 router.delete("/:id", auth, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
